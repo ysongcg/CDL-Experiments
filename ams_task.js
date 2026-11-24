@@ -231,31 +231,80 @@
   }
 
   // ------------------------------------------------------------------ preload
+  // Images load in two steps: the ones needed up to the end of practice load before the task
+  // starts; the 48 test images load in the background during instructions / samples / practice.
   const IMG = {};
-  function imageListFor(ageGroup) {
-    const names = new Set([MASK_IMG, READY_IMG, ...BLOCK_IMGS, END_IMG]);
+  function firstImages() {
+    const names = new Set([MASK_IMG, READY_IMG, BLOCK_IMGS[0]]);
     D.samples.forEach((s) => s.trials.forEach((t) => names.add(t.visual_stimuli)));
     D.practice.trials.forEach((t) => names.add(t.visual_stimuli));
-    D.blocks[ageGroup].forEach((b) => b.trials.forEach((t) => names.add(t.visual_stimuli)));
     return [...names];
   }
-  async function preload(names) {
-    clearStage();
-    const msg = addText("Loading images… 0 / " + names.length, 0, 0.04, { wrap: 1.2 });
-    msg.id = "loading";
+  function testImages(ageGroup) {
+    const first = new Set(firstImages());
+    const names = new Set([BLOCK_IMGS[1], BLOCK_IMGS[2], END_IMG]);
+    D.blocks[ageGroup].forEach((b) => b.trials.forEach((t) => names.add(t.visual_stimuli)));
+    return [...names].filter((n) => !first.has(n));
+  }
+  /** Load (and decode) images. onProgress(done, total) is called after each one. */
+  function preload(names, onProgress = () => {}) {
     let done = 0;
     const missing = [];
-    await Promise.all(names.map((n) => new Promise((resolve) => {
+    return Promise.all(names.map((n) => new Promise((resolve) => {
       const img = new Image();
       img.draggable = false;
       img.onload = async () => {
         try { await img.decode(); } catch (e) { /* ignore */ }
-        IMG[n] = img; done++; msg.textContent = `Loading images… ${done} / ${names.length}`; resolve();
+        IMG[n] = img; done++; onProgress(done, names.length); resolve();
       };
-      img.onerror = () => { missing.push(n); done++; resolve(); };
+      img.onerror = () => { missing.push(n); done++; onProgress(done, names.length); resolve(); };
       img.src = IMAGE_DIR + n;
-    })));
-    return missing;
+    }))).then(() => missing);
+  }
+  let testLoad = null; // { promise, done, total }
+
+  /** Show a loading screen; returns a function that updates it. */
+  function loadingScreen(total) {
+    clearStage();
+    const msg = addText(`Loading images… 0 / ${total}`, 0, 0.04, { wrap: 1.2 });
+    msg.id = "loading";
+    return (done, tot) => { msg.textContent = `Loading images… ${done} / ${tot}`; };
+  }
+
+  /** Ask whether to go on when images are missing. Resolves true = continue. */
+  function missingImagesScreen(missing) {
+    clearStage();
+    const box = addText("", 0.05, 0.03, { wrap: 1.3 });
+    box.innerHTML = `<b>${missing.length} image(s) could not be loaded</b> from "${IMAGE_DIR || "./"}":` +
+      `<div class="missing">${missing.map((m) => "• " + m).join("<br>")}</div>`;
+    return new Promise((resolve) => {
+      const mk = (label, x, v) => {
+        const b = document.createElement("button");
+        b.className = "btn endbtn"; b.textContent = label;
+        b.style.top = `calc(50% + 0.38 * var(--u))`;
+        b.style.left = `calc(50% + ${x} * var(--u))`;
+        b.addEventListener("click", () => resolve(v));
+        stage.appendChild(b);
+      };
+      mk("Back", -0.15, false);
+      mk("Continue anyway", 0.15, true);
+    });
+  }
+
+  /** Before the test blocks: wait for the background download if it hasn't finished. */
+  async function ensureTestImages() {
+    if (!testLoad) return true;
+    let missing;
+    if (testLoad.finished) {
+      missing = await testLoad.promise;
+    } else {
+      const update = loadingScreen(testLoad.total);
+      update(testLoad.done, testLoad.total);
+      testLoad.onProgress = update;
+      missing = await testLoad.promise;
+    }
+    if (missing.length) return missingImagesScreen(missing);
+    return true;
   }
 
   // ------------------------------------------------------------------ screens
@@ -506,6 +555,9 @@
     session.block_order = blocks.map((b) => b.file.replace(/^.*_(b\d)\.xlsx$/, "$1")).join("-");
     rows.forEach((r) => { r.block_order = session.block_order; });
 
+    // test images normally finished loading during practice; if not, wait here
+    if (!(await ensureTestImages())) { abortSession(); return; }
+
     await readyScreen(BLOCK_IMGS[0], 0.05, -0.40, T.ams_nofeedback);
     await runBlock(blocks[0], 1);
     await readyScreen(BLOCK_IMGS[1], 0, -0.40);
@@ -540,6 +592,7 @@
       web_version: WEB_VERSION,
       language: T.language || "english",
       block_order: "",
+      test_images_loaded_s: "",
       screen_size: `${screen.width}x${screen.height}`,
       window_size: `${window.innerWidth}x${window.innerHeight}`,
       device_pixel_ratio: window.devicePixelRatio || 1,
@@ -556,26 +609,25 @@
     updateUnits();
     session.window_size = `${window.innerWidth}x${window.innerHeight}`;
 
-    const missing = await preload(imageListFor(age));
-    if (missing.length) {
-      clearStage();
-      const box = addText("", 0.05, 0.03, { wrap: 1.3 });
-      box.innerHTML = `<b>${missing.length} image(s) could not be loaded</b> from "${IMAGE_DIR || "./"}":` +
-        `<div class="missing">${missing.map((m) => "• " + m).join("<br>")}</div>`;
-      const go = await new Promise((resolve) => {
-        const mk = (label, x, v) => {
-          const b = document.createElement("button");
-          b.className = "btn endbtn"; b.textContent = label;
-          b.style.top = `calc(50% + 0.38 * var(--u))`;
-          b.style.left = `calc(50% + ${x} * var(--u))`;
-          b.addEventListener("click", () => resolve(v));
-          stage.appendChild(b);
-        };
-        mk("Back", -0.15, false);
-        mk("Continue anyway", 0.15, true);
-      });
-      if (!go) { location.reload(); return; }
-    }
+    // 1) images needed until the end of practice
+    const first = firstImages();
+    const missing = await preload(first, loadingScreen(first.length));
+    if (missing.length && !(await missingImagesScreen(missing))) { location.reload(); return; }
+
+    // 2) test images keep loading in the background while the child does samples / practice
+    const rest = testImages(age);
+    testLoad = { done: 0, total: rest.length, finished: false, onProgress: null };
+    testLoad.promise = preload(rest, (done, total) => {
+      testLoad.done = done;
+      if (testLoad.onProgress) testLoad.onProgress(done, total);
+    }).then((m) => {
+      testLoad.finished = true;
+      const v = ((performance.now() - expStart) / 1000).toFixed(1);
+      session.test_images_loaded_s = v;
+      rows.forEach((r) => { r.test_images_loaded_s = v; });
+      return m;
+    });
+
     runTask();
   }
 
