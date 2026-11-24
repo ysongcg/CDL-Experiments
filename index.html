@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>ManyNumbers – AMS Task</title>
+<style>
+  :root { --u: 1px; --bg: #808080; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: var(--bg); font-family: Arial, Helvetica, sans-serif; color: #000;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none; touch-action: none;
+  }
+  body { position: fixed; inset: 0; }
+
+  /* ---------- setup page ---------- */
+  #setup {
+    position: absolute; inset: 0; overflow: auto; touch-action: auto;
+    display: flex; align-items: center; justify-content: center;
+    -webkit-user-select: text; user-select: text;
+  }
+  #setup .card {
+    background: #f4f4f4; border-radius: 10px; padding: 28px 32px; width: min(420px, 90vw);
+    box-shadow: 0 2px 12px rgba(0,0,0,.25);
+  }
+  #setup h1 { font-size: 22px; margin: 0 0 18px; }
+  #setup label { display: block; font-size: 15px; margin: 14px 0 6px; font-weight: bold; }
+  #setup input, #setup select {
+    width: 100%; box-sizing: border-box; font-size: 17px; padding: 9px 10px;
+    border: 1px solid #999; border-radius: 6px; background: #fff;
+  }
+  #setup .err { color: #b00020; font-size: 14px; min-height: 18px; margin-top: 10px; }
+  #setup .note { font-size: 13px; color: #444; margin-top: 14px; line-height: 1.4; }
+  button.btn {
+    font-size: 17px; padding: 10px 22px; border-radius: 6px; border: 1px solid #333;
+    background: #fff; cursor: pointer; font-family: inherit;
+  }
+  button.btn.primary { background: #1a5fb4; color: #fff; border-color: #1a5fb4; }
+  #setup .actions { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+
+  /* ---------- task stage (positions use PsychoPy 'height' units via --u) ---------- */
+  #stage { position: absolute; inset: 0; display: none; cursor: default; }
+  .el {
+    position: absolute; left: 50%; transform: translate(-50%, -50%);
+    text-align: center; white-space: pre-wrap; line-height: 1.2;
+  }
+  .el img, img.el { display: block; pointer-events: none; -webkit-user-drag: none; }
+  .hidden { visibility: hidden; }
+  .fixation { width: calc(0.2 * var(--u)); height: calc(0.2 * var(--u)); }
+  .fixation::before, .fixation::after { content: ""; position: absolute; background: #fff; }
+  .fixation::before { left: 40%; width: 20%; top: 0; height: 100%; }
+  .fixation::after  { top: 40%; height: 20%; left: 0; width: 100%; }
+
+  #loading { font-size: calc(0.04 * var(--u)); }
+  #loading .missing { font-size: 14px; text-align: left; max-height: 40vh; overflow: auto; color: #400; }
+
+  /* quit control (Esc on keyboard, or this corner button on touch screens) */
+  #quitBtn {
+    position: absolute; top: 8px; right: 8px; width: 40px; height: 40px; border-radius: 20px;
+    border: none; background: rgba(0,0,0,.12); color: rgba(0,0,0,.45); font-size: 20px;
+    display: none; cursor: pointer; z-index: 5;
+  }
+  #overlay {
+    position: absolute; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 10;
+    align-items: center; justify-content: center;
+  }
+  #overlay .box {
+    background: #fff; border-radius: 10px; padding: 24px 28px; max-width: 90vw; width: 420px;
+    text-align: center; font-size: 17px; line-height: 1.4;
+  }
+  #overlay .actions { display: flex; gap: 12px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+  .endbtn { position: absolute; left: 50%; transform: translate(-50%, -50%); z-index: 3; }
+</style>
+</head>
+<body>
+
+<div id="setup">
+  <div class="card">
+    <h1>ManyNumbers – AMS Task</h1>
+    <label for="pid">Participant ID</label>
+    <input id="pid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label for="age">Age group</label>
+    <select id="age">
+      <option value="">– choose –</option>
+      <option value="3 or younger">3 or younger</option>
+      <option value="4">4</option>
+      <option value="5">5</option>
+    </select>
+    <div class="err" id="setupErr"></div>
+    <div class="actions">
+      <button class="btn primary" id="startBtn">Start</button>
+      <button class="btn" id="recoverBtn" style="display:none">Download unsaved data from last session</button>
+    </div>
+    <div class="note">
+      The task runs in full screen. Responses: <b>S</b> key / tap or click the left side = blue,
+      <b>L</b> key / tap or click the right side = yellow. Space bar or a tap moves to the next screen.
+      Press <b>Esc</b> (or the ✕ in the corner) to stop early. The data file (.csv) downloads at the end.
+    </div>
+  </div>
+</div>
+
+<div id="stage"></div>
+<button id="quitBtn" title="Stop task">✕</button>
+<div id="overlay"><div class="box">
+  <div>Stop the task now?<br>The data collected so far will be downloaded.</div>
+  <div class="actions">
+    <button class="btn" id="resumeBtn">Keep going</button>
+    <button class="btn primary" id="stopBtn">Stop &amp; download</button>
+  </div>
+</div></div>
+
+<script src="ams_stimuli.js"></script>
+<script src="ams_task.js"></script>
+</body>
+</html>
