@@ -246,20 +246,39 @@
     D.blocks[ageGroup].forEach((b) => b.trials.forEach((t) => names.add(t.visual_stimuli)));
     return [...names].filter((n) => !first.has(n));
   }
-  /** Load (and decode) images. onProgress(done, total) is called after each one. */
-  function preload(names, onProgress = () => {}) {
-    let done = 0;
-    const missing = [];
-    return Promise.all(names.map((n) => new Promise((resolve) => {
+  /** Load (and decode) images. onProgress(done, total) is called after each one.
+   *  A failed image is retried up to 3 more times (a brief network hiccup shouldn't count as missing).
+   *  Images that still fail are returned and written to the data file (column missing_images). */
+  const MAX_TRIES = 4;
+  function loadOne(n, attempt = 1) {
+    return new Promise((resolve) => {
       const img = new Image();
       img.draggable = false;
       img.onload = async () => {
         try { await img.decode(); } catch (e) { /* ignore */ }
-        IMG[n] = img; done++; onProgress(done, names.length); resolve();
+        resolve(img);
       };
-      img.onerror = () => { missing.push(n); done++; onProgress(done, names.length); resolve(); };
-      img.src = IMAGE_DIR + n;
-    }))).then(() => missing);
+      img.onerror = () => {
+        if (attempt >= MAX_TRIES) { resolve(null); return; }
+        setTimeout(() => loadOne(n, attempt + 1).then(resolve), 500 * attempt);
+      };
+      img.src = IMAGE_DIR + n + (attempt > 1 ? `?retry=${attempt}` : "");
+    });
+  }
+  function preload(names, onProgress = () => {}) {
+    let done = 0;
+    const missing = [];
+    return Promise.all(names.map((n) => loadOne(n).then((img) => {
+      if (img) IMG[n] = img; else missing.push(n);
+      done++; onProgress(done, names.length);
+    }))).then(() => {
+      if (missing.length && session) {
+        const all = [session.missing_images, ...missing].filter(Boolean).join(";");
+        session.missing_images = all;
+        rows.forEach((r) => { r.missing_images = all; });
+      }
+      return missing;
+    });
   }
   let testLoad = null; // { promise, done, total }
 
@@ -593,6 +612,7 @@
       language: T.language || "english",
       block_order: "",
       test_images_loaded_s: "",
+      missing_images: "",
       screen_size: `${screen.width}x${screen.height}`,
       window_size: `${window.innerWidth}x${window.innerHeight}`,
       device_pixel_ratio: window.devicePixelRatio || 1,
